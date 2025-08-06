@@ -4,14 +4,14 @@ import os
 
 import torch
 import torch.distributed as dist
-import wandb
 from accelerate.utils import set_seed
 from datasets import load_dataset
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import MixedPrecision, ShardingStrategy, StateDictType
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
+import wandb
 from specforge import (
     AutoDistributedTargetModel,
     AutoDraftModelConfig,
@@ -132,12 +132,22 @@ def main():
 
     # build target and draft model
     if args.tp_size > 1:
-        # to avoid CPU RAM OOM, we directly init the model on CUDA
-        target_model = AutoDistributedTargetModel.from_pretrained(
-            pretrained_model_name_or_path=args.target_model_path,
-            torch_dtype=torch.bfloat16,
-            device="cuda",
-        ).eval()
+        # check if the target model has tp_plan
+        config = AutoConfig.from_pretrained(args.target_model_path)
+
+        if config in AutoDistributedTargetModel._model_mapping:
+            target_model = AutoDistributedTargetModel.from_pretrained(
+                pretrained_model_name_or_path=args.target_model_path,
+                torch_dtype=torch.bfloat16,
+                device="cuda",
+            ).eval()
+        else:
+            target_model = AutoModelForCausalLM.from_pretrained(
+                args.target_model_path,
+                tp_plan="auto",
+                torch_dtype=torch.bfloat16,
+                device="cuda",
+            ).eval()
     else:
         target_model = (
             AutoModelForCausalLM.from_pretrained(

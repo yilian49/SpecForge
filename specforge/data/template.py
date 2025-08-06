@@ -113,3 +113,13 @@ TEMPLATE_REGISTRY.register(
         end_of_turn_token="<|im_end|>\n",
     ),
 )
+
+TEMPLATE_REGISTRY.register(
+    name="gpt-oss",
+    template=ChatTemplate(
+        assistant_header="<|start|>assistant<|channel|>final<|message|>",
+        user_header="<|start|>user<|message|>",
+        system_prompt="You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2025-08-05\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.",
+        end_of_turn_token="<|end|>",
+    ),
+)
