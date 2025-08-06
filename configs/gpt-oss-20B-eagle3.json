@@ -2,6 +2,13 @@
   "architectures": [
     "LlamaForCausalLMEagle3"
   ],
+  "eagle_config": {
+    "eagle_aux_hidden_state_layer_ids": [
+      1,
+      11,
+      21
+    ]
+  },
   "head_dim": 64,
   "hidden_act": "silu",
   "hidden_size": 2880,
