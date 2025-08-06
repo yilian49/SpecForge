@@ -17,7 +17,9 @@ from specforge.layers.linear import ColumnParallelLinear, RowParallelLinear
 
 class DistributedTargetModel(ABC):
 
-    def _load_ckpt_files(self, model_path: str, cache_dir: Optional[str] = None) -> Generator[str, None, None]:
+    def _load_ckpt_files(
+        self, model_path: str, cache_dir: Optional[str] = None
+    ) -> Generator[str, None, None]:
         """
         Load the embedding of the draft model.
 
@@ -64,7 +66,9 @@ class DistributedTargetModel(ABC):
         else:
             # this is the case where model_path is a huggingface repository
             # we first need to locate its local cache
-            local_cache_path = snapshot_download(repo_id=model_path, cache_dir=cache_dir)
+            local_cache_path = snapshot_download(
+                repo_id=model_path, cache_dir=cache_dir
+            )
             yield from self._load_ckpt_files(local_cache_path, cache_dir)
 
     def _open_ckpt_file(self, ckpt_file: str) -> Dict[str, torch.Tensor]:
