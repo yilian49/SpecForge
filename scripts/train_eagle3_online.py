@@ -23,7 +23,12 @@ from specforge.data import (
     generate_vocab_mapping_file,
     prepare_dp_dataloaders,
 )
-from specforge.distributed import destroy_distributed, get_dp_group, init_distributed
+from specforge.distributed import (
+    destroy_distributed,
+    get_dp_group,
+    get_tp_device_mesh,
+    init_distributed,
+)
 from specforge.lr_scheduler import CosineAnnealingWarmupLR
 from specforge.utils import (
     get_last_checkpoint,
@@ -135,7 +140,7 @@ def main():
         # check if the target model has tp_plan
         config = AutoConfig.from_pretrained(args.target_model_path)
 
-        if config in AutoDistributedTargetModel._model_mapping:
+        if type(config) in AutoDistributedTargetModel._model_mapping:
             target_model = AutoDistributedTargetModel.from_pretrained(
                 pretrained_model_name_or_path=args.target_model_path,
                 torch_dtype=torch.bfloat16,
@@ -146,7 +151,7 @@ def main():
                 args.target_model_path,
                 tp_plan="auto",
                 torch_dtype=torch.bfloat16,
-                device="cuda",
+                device_mesh=get_tp_device_mesh(),
             ).eval()
     else:
         target_model = (
