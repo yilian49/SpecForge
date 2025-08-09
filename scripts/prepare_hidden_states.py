@@ -30,7 +30,7 @@ def parse_args():
 
     # Backend selection
     parser.add_argument(
-        "--backend",
+        "--generator-backend",
         type=str,
         default="sglang",
         choices=["huggingface", "sglang"],
@@ -74,19 +74,6 @@ def parse_args():
         help="Number of samples to process (for debugging)",
     )
 
-    # Hidden states arguments
-    parser.add_argument(
-        "--enable-aux-hidden-states",
-        action="store_true",
-        help="Enable auxiliary hidden states extraction",
-    )
-    parser.add_argument(
-        "--aux-hidden-states-layers",
-        type=str,
-        default=None,
-        help="Comma-separated list of layer indices for auxiliary hidden states",
-    )
-
     # Performance arguments
     parser.add_argument(
         "--batch-size",
@@ -110,34 +97,24 @@ def parse_args():
 
     # Other arguments
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument(
-        "--trust-remote-code",
-        action="store_true",
-        help="Trust remote code when loading models",
-    )
 
-    # Backend-specific arguments (SGLang)
-    # These will be passed through if using SGLang backend
-    if (
-        "--backend" in sys.argv
-        and sys.argv[sys.argv.index("--backend") + 1] == "sglang"
-    ):
-        try:
-            from sglang.bench_one_batch import BenchArgs
-            from sglang.srt.server_args import ServerArgs
+    # # Backend-specific arguments (SGLang)
 
-            ServerArgs.add_cli_args(parser)
-            BenchArgs.add_cli_args(parser)
-        except ImportError:
-            print("Warning: SGLang not installed, cannot add SGLang-specific arguments")
+    # from sglang.bench_one_batch import BenchArgs
+    # from sglang.srt.server_args import ServerArgs
+
+    # ServerArgs.add_cli_args(parser)
+    # BenchArgs.add_cli_args(parser)
 
     args = parser.parse_args()
+    if args.backend == "sglang":
+            # Backend-specific arguments (SGLang)
+        from sglang.bench_one_batch import BenchArgs
+        from sglang.srt.server_args import ServerArgs
 
-    # Parse aux_hidden_states_layers if provided
-    if args.aux_hidden_states_layers:
-        args.aux_hidden_states_layers = [
-            int(x.strip()) for x in args.aux_hidden_states_layers.split(",")
-        ]
+        ServerArgs.add_cli_args(parser)
+        BenchArgs.add_cli_args(parser)
+
 
     return args
 
