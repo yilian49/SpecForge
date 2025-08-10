@@ -19,7 +19,32 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from specforge.data import build_eagle3_dataset
 from specforge.generators import GeneratorArgs, create_hidden_states_generator
-from specforge.utils import print_on_rank0, print_with_rank, rank_0_priority, set_seed
+from specforge.utils import print_with_rank, rank_0_priority
+
+
+def print_on_rank0(message):
+    """Print message only on rank 0."""
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        print(message)
+
+
+def print_with_rank_safe(message):
+    """Print message with rank information, safe for single GPU mode."""
+    if dist.is_initialized():
+        print_with_rank(message)
+    else:
+        print(message)
+
+
+def set_seed(seed):
+    """Set random seeds for reproducibility."""
+    import random
+    import numpy as np
+    
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def parse_args():
@@ -38,9 +63,6 @@ def parse_args():
     )
 
     # Model and data arguments
-    parser.add_argument(
-        "--model-path", type=str, required=True, help="Path to the target model"
-    )
     parser.add_argument(
         "--data-path", type=str, required=True, help="Path to training data (JSON file)"
     )
@@ -97,6 +119,8 @@ def parse_args():
 
     # Other arguments
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    
+    # Note: Some arguments will be added conditionally based on backend to avoid conflicts
 
     # # Backend-specific arguments (SGLang)
 
@@ -106,16 +130,63 @@ def parse_args():
     # ServerArgs.add_cli_args(parser)
     # BenchArgs.add_cli_args(parser)
 
-    args = parser.parse_args()
-    if args.backend == "sglang":
-            # Backend-specific arguments (SGLang)
+    # First parse known args to check if we need SGLang-specific args
+    known_args, _ = parser.parse_known_args()
+    
+    if known_args.generator_backend == "sglang":
+        # Backend-specific arguments (SGLang)
         from sglang.bench_one_batch import BenchArgs
         from sglang.srt.server_args import ServerArgs
 
         ServerArgs.add_cli_args(parser)
         BenchArgs.add_cli_args(parser)
+        
+        # Add our specific arguments for SGLang (with different names to avoid conflicts)
+        parser.add_argument(
+            "--enable-aux-hidden-states", 
+            action="store_true", 
+            help="Enable auxiliary hidden states capture for Eagle3"
+        )
+        parser.add_argument(
+            "--aux-hidden-states-layers",
+            type=str,
+            default=None,
+            help="Specific layers to capture for auxiliary hidden states (comma-separated)"
+        )
+    else:
+        # Add model-path and other arguments for non-SGLang backends to avoid conflicts
+        parser.add_argument(
+            "--model-path", type=str, required=True, help="Path to the target model"
+        )
+        parser.add_argument(
+            "--enable-aux-hidden-states", 
+            action="store_true", 
+            help="Enable auxiliary hidden states capture"
+        )
+        parser.add_argument(
+            "--aux-hidden-states-layers",
+            type=str,
+            default=None,
+            help="Specific layers to capture for auxiliary hidden states (comma-separated)"
+        )
+        parser.add_argument(
+            "--trust-remote-code",
+            action="store_true",
+            help="Trust remote code when loading models"
+        )
 
-
+    # Now parse all args
+    args = parser.parse_args()
+    
+    # Parse aux_hidden_states_layers if provided as string
+    if hasattr(args, 'aux_hidden_states_layers') and args.aux_hidden_states_layers is not None:
+        if isinstance(args.aux_hidden_states_layers, str):
+            # Convert comma-separated string to list of integers
+            try:
+                args.aux_hidden_states_layers = [int(x.strip()) for x in args.aux_hidden_states_layers.split(',')]
+            except ValueError:
+                raise ValueError(f"aux_hidden_states_layers must be comma-separated integers, got: {args.aux_hidden_states_layers}")
+    
     return args
 
 
@@ -139,7 +210,7 @@ def initialize_distributed(args):
             dist.init_process_group(backend="nccl", **timeout_kwargs)
 
         tp_rank = dist.get_rank()
-        print_with_rank(
+        print_with_rank_safe(
             f"Initialized distributed environment (rank {tp_rank}/{tp_size})"
         )
     else:
@@ -161,7 +232,7 @@ def main():
     # Set default output path if not provided
     if args.output_path is None:
         root_path = Path(__file__).parent.parent
-        args.output_path = root_path / "cache" / "hidden_states" / args.backend
+        args.output_path = root_path / "cache" / "hidden_states" / args.generator_backend
         args.output_path = str(args.output_path)
 
     # Create output directory
@@ -191,7 +262,17 @@ def main():
     print_on_rank0("Building Eagle3 dataset...")
     cache_key = hashlib.md5(args.data_path.encode()).hexdigest()
 
-    with rank_0_priority():
+    if dist.is_initialized():
+        with rank_0_priority():
+            eagle3_dataset = build_eagle3_dataset(
+                dataset=dataset,
+                tokenizer=tokenizer,
+                chat_template=args.chat_template,
+                max_length=args.max_length,
+                cache_dir=os.path.join(args.cache_dir, "processed_dataset"),
+                cache_key=cache_key,
+            )
+    else:
         eagle3_dataset = build_eagle3_dataset(
             dataset=dataset,
             tokenizer=tokenizer,
@@ -201,10 +282,10 @@ def main():
             cache_key=cache_key,
         )
 
-    print_with_rank(f"Built dataset with {len(eagle3_dataset)} samples")
+    print_with_rank_safe(f"Built dataset with {len(eagle3_dataset)} samples")
 
     # Create generator arguments based on backend
-    if args.backend == "sglang":
+    if args.generator_backend == "sglang":
         # For SGLang, we pass the full args object since it has SGLang-specific fields
         # The SGLang generator will extract what it needs
         gen_args = args
@@ -215,19 +296,19 @@ def main():
             output_path=args.output_path,
             max_length=args.max_length,
             batch_size=args.batch_size or [1],
-            enable_aux_hidden_states=args.enable_aux_hidden_states,
-            aux_hidden_states_layers=args.aux_hidden_states_layers,
+            enable_aux_hidden_states=getattr(args, 'enable_aux_hidden_states', False),
+            aux_hidden_states_layers=getattr(args, 'aux_hidden_states_layers', None),
             seed=args.seed,
             tp_size=args.tp_size,  # Now properly passed for HuggingFace too
             cache_dir=args.cache_dir,
-            trust_remote_code=args.trust_remote_code,
-            profile=args.profile,
+            trust_remote_code=getattr(args, 'trust_remote_code', False),
+            profile=getattr(args, 'profile', False),
         )
 
     # Create generator
-    print_on_rank0(f"Creating {args.backend} generator...")
+    print_on_rank0(f"Creating {args.generator_backend} generator...")
     try:
-        if args.backend == "sglang":
+        if args.generator_backend == "sglang":
             # For SGLang, use the original class directly with the args
             from specforge.generators.sglang_generator import (
                 SglangHiddenStatesGenerator,
@@ -237,14 +318,14 @@ def main():
         else:
             # For other backends, use the factory function
             generator = create_hidden_states_generator(
-                generator_type=args.backend, args=gen_args, tp_rank=tp_rank
+                generator_type=args.generator_backend, args=gen_args, tp_rank=tp_rank
             )
     except (ImportError, ValueError) as e:
-        print(f"Error creating {args.backend} generator: {e}")
+        print(f"Error creating {args.generator_backend} generator: {e}")
         sys.exit(1)
 
     # Generate hidden states
-    print_on_rank0(f"Starting hidden states generation with {args.backend} backend...")
+    print_on_rank0(f"Starting hidden states generation with {args.generator_backend} backend...")
     generator.generate(eagle3_dataset)
 
     print_on_rank0(
