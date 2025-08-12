@@ -17,11 +17,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, Dict
 
 import torch
 from torch import nn
-
+import torch.distributed as dist
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation import GenerationMixin
@@ -146,13 +146,16 @@ class LlamaMLP(nn.Module):
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
+
+        self.tp_group = get_tp_group()
+        self.gate_proj = ColumnParallelLinear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        self.up_proj = ColumnParallelLinear(self.hidden_size, self.intermediate_size, bias=config.mlp_bias)
+        self.down_proj = RowParallelLinear(self.intermediate_size, self.hidden_size, bias=config.mlp_bias)
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
         down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        dist.all_reduce(down_proj, op=dist.ReduceOp.SUM, group=self.tp_group)
         return down_proj
 
 
@@ -207,16 +210,18 @@ class LlamaAttention(nn.Module):
         self.attention_dropout = config.attention_dropout
         self.is_causal = True
 
-        self.q_proj = nn.Linear(
+        # distributed linear layers
+        self.tp_group = get_tp_group()
+        self.q_proj = ColumnParallelLinear(
             config.hidden_size, config.num_attention_heads * self.head_dim, bias=config.attention_bias
         )
-        self.k_proj = nn.Linear(
+        self.k_proj = ColumnParallelLinear(
             config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
         )
-        self.v_proj = nn.Linear(
+        self.v_proj = ColumnParallelLinear(
             config.hidden_size, config.num_key_value_heads * self.head_dim, bias=config.attention_bias
         )
-        self.o_proj = nn.Linear(
+        self.o_proj = RowParallelLinear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=config.attention_bias
         )
 
@@ -261,6 +266,7 @@ class LlamaAttention(nn.Module):
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
+        dist.all_reduce(attn_output, op=dist.ReduceOp.SUM, group=self.tp_group)
         return attn_output, attn_weights
 
 
@@ -408,7 +414,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
 
 @auto_docstring
-class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
+class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin, DistributedTargetModel):
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
@@ -417,7 +423,10 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         super().__init__(config)
         self.model = LlamaModel(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        # distributed the lm head
+        self.lm_head = ColumnParallelLinear(
+            config.hidden_size, config.vocab_size, bias=False
+        )
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -475,6 +484,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.lm_head(hidden_states[:, slice_indices, :])
+        logits = self._gather_tensor(logits, get_tp_group())
 
         loss = None
         if labels is not None:
@@ -488,9 +498,35 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             attentions=outputs.attentions,
         )
 
+    def load_weights(self, state_dict: Dict[str, torch.Tensor]):
+        tp_group = get_tp_group()
+        tp_rank = dist.get_rank(tp_group)
 
+        updated_state_dict = {}
+        for key, value in state_dict.items():
+            if not isinstance(value, torch.Tensor):
+                raise ValueError(
+                    f"Expected all values in the state dict to be torch.Tensor. "
+                    f"Found {type(value)} for key {key}."
+                )
 
+            module_key = ".".join(key.split(".")[:-1])
+            module = self.get_submodule(module_key)
 
+            if isinstance(module, ColumnParallelLinear):
+                if key.endswith(".weight"):
+                    value = self._shard_tensor(value, tp_group, 0)
+                elif key.endswith(".bias"):
+                    value = self._shard_tensor(value, tp_group, 0)
+            elif isinstance(module, RowParallelLinear):
+                if key.endswith(".weight"):
+                    value = self._shard_tensor(value, tp_group, -1)
+                elif key.endswith(".bias"):
+                    if tp_rank != 0:
+                        value = torch.zeros_like(value)
+            
+            updated_state_dict[key] = value
+        self.load_state_dict(updated_state_dict, strict=False)
 
 __all__ = [
     "LlamaForCausalLM",
