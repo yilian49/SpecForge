@@ -185,10 +185,10 @@ class SglangHiddenStatesGenerator:
                     )
                     assert not torch.any(
                         torch.isnan(data_point["hidden_state"])
-                    ), f"hidden_state is expected to be non-nan"
+                    ), "hidden_state is expected to be non-nan"
                     assert not torch.any(
                         torch.isnan(data_point["aux_hidden_state"])
-                    ), f"aux_hidden_state is expected to be non-nan"
+                    ), "aux_hidden_state is expected to be non-nan"
                     torch.save(data_point, output_file)
             else:
                 for hidden_state, (data_point, output_file) in zip(
@@ -197,7 +197,7 @@ class SglangHiddenStatesGenerator:
                     data_point["hidden_state"] = hidden_state.clone().unsqueeze(0).cpu()
                     assert not torch.any(
                         torch.isnan(data_point["hidden_state"])
-                    ), f"hidden_state is expected to be non-nan"
+                    ), "hidden_state is expected to be non-nan"
                     torch.save(data_point, output_file)
 
     def generate(self, dataset: Dataset):
@@ -349,7 +349,13 @@ def main():
     if args.num_samples is not None:
         dataset = dataset.select(range(args.num_samples))
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    cache_key = hashlib.md5(args.data_path.encode()).hexdigest()
+    cache_params_string = (
+        f"{args.data_path}-"
+        f"{args.max_length}-"
+        f"{args.chat_template}-"
+        f"{args.model_path}"  # Tokenizer may also different
+    )
+    cache_key = hashlib.md5(cache_params_string.encode()).hexdigest()
     with rank_0_priority():
         eagle3_dataset = build_eagle3_dataset(
             dataset=dataset,
@@ -359,7 +365,7 @@ def main():
             cache_dir=os.path.join(args.cache_dir, "processed_dataset"),
             cache_key=cache_key,
         )
-        print_with_rank(f"Built dataset")
+        print_with_rank("Built dataset")
 
     hidden_states_generator = SglangHiddenStatesGenerator(
         args, tp_rank=torch.distributed.get_rank()
