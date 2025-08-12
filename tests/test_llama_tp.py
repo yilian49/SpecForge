@@ -36,7 +36,7 @@ def test_llama3_tp(rank, world_size, temp_dir):
     # create the single-gpu
     model = LlamaForCausalLM(config).cuda()
 
-    from specforge.modeling.target.llama3 import (
+    from SpecForge.specforge.modeling.target.llama import (
         LlamaForCausalLM as DistLlamaForCausalLM,
     )
 
