@@ -141,7 +141,13 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.target_model_path)
 
     # convert to dataloader
-    cache_key = hashlib.md5(args.train_data_path.encode()).hexdigest()
+    cache_params_string = (
+        f"{args.train_data_path}-"
+        f"{args.max_length}-"
+        f"{args.chat_template}-"
+        f"{args.target_model_path}"  # Tokenizer may also different
+    )
+    cache_key = hashlib.md5(cache_params_string.encode()).hexdigest()
     train_dataset = load_dataset("json", data_files=args.train_data_path)["train"]
     with rank_0_priority():
         train_eagle3_dataset_tmp = build_eagle3_dataset(
@@ -329,7 +335,7 @@ def main():
                 draft_model_state_dict = {
                     k.replace("draft_model.", ""): v
                     for k, v in model_state_dict.items()
-                    if "draft_model." in k
+                    if "draft_model." in k and "embed" not in k.lower()
                 }
 
                 if dist.get_rank() == 0:
