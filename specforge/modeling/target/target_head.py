@@ -17,7 +17,12 @@ class TargetHead(nn.Module):
         self.fc = nn.Linear(self.config.hidden_size, self.config.vocab_size, bias=False)
 
     @torch.no_grad()
-    def load_weights(self, model_path, lm_head_key: str = "lm_head.weight", cache_dir: Optional[str] = None):
+    def load_weights(
+        self,
+        model_path,
+        lm_head_key: str = "lm_head.weight",
+        cache_dir: Optional[str] = None,
+    ):
         if os.path.exists(model_path):
             self.model_path = model_path
         else:
