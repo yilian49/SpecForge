@@ -22,4 +22,5 @@ torchrun --standalone --nproc_per_node=4 \
   --dist-timeout 7200 \
   --aux-hidden-states-layers 1,17,33 \
   --start-idx 80000 \
+  --end-idx 702612
   # --start-idx 702612
