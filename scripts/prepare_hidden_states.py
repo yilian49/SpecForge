@@ -243,8 +243,19 @@ class SglangHiddenStatesGenerator:
         batch_size = self.bench_args.batch_size[0]
         batch_save_info = []
         group_size = 5000
-        for idx, row in tqdm(enumerate(dataset), total=len(dataset)):
-            group_start = (idx // group_size) * group_size
+        
+        # Determine the range to process
+        start_idx = self.args.start_idx if self.args.start_idx is not None else 0
+        end_idx = self.args.end_idx if self.args.end_idx is not None else len(dataset)
+        
+        # Process only the specified range while preserving original indexing
+        dataset_slice = dataset.select(range(start_idx, min(end_idx, len(dataset))))
+        
+        for local_idx, row in tqdm(enumerate(dataset_slice), total=len(dataset_slice)):
+            # Calculate the original dataset index
+            original_idx = start_idx + local_idx
+            
+            group_start = (original_idx // group_size) * group_size
             group_end = group_start + group_size
             grouped_subdir = f"rows_{group_start}-{group_end}"
             if self.tp_rank == 0 and not os.path.exists(
@@ -252,7 +263,7 @@ class SglangHiddenStatesGenerator:
             ):
                 os.makedirs(f"{self.args.output_path}/{grouped_subdir}")
 
-            output_file = f"{self.args.output_path}/{grouped_subdir}/data_{idx}.ckpt"
+            output_file = f"{self.args.output_path}/{grouped_subdir}/data_{original_idx}.ckpt"
             if (
                 os.path.exists(output_file)
                 and os.path.getsize(output_file) > MIN_FILE_SIZE
@@ -270,7 +281,7 @@ class SglangHiddenStatesGenerator:
             )
 
             req = Req(
-                rid=str(idx),
+                rid=str(original_idx),
                 origin_input_text="",
                 origin_input_ids=row["input_ids"].view(-1).tolist(),
                 sampling_params=sampling_params,
@@ -318,6 +329,8 @@ def parse_args():
     # parser.add_argument("--chat-template", type=str, default="llama3")
 
     parser.add_argument("--num-samples", type=int, default=None)
+    parser.add_argument("--start-idx", type=int, default=None, help="Start index for processing dataset rows")
+    parser.add_argument("--end-idx", type=int, default=None, help="End index for processing dataset rows (exclusive)")
     parser.add_argument("--enable-aux-hidden-states", action="store_true")
     parser.add_argument("--aux-hidden-states-layers", type=str, default=None)
     parser.add_argument("--build-dataset-num-proc", type=int, default=8)
