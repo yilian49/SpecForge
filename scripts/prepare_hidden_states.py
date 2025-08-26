@@ -328,6 +328,23 @@ def parse_args():
 
 
 def main():
+    if torch.cuda.is_available():
+        torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
+        
+    # Force a local rendezvous on single-node runs unless user opts out.
+    # Some environments leak MASTER_ADDR/PORT (e.g., g258.*) into the worker.
+    if os.environ.get("FORCE_REMOTE_MASTER", "0") != "1":
+        os.environ["MASTER_ADDR"] = "127.0.0.1"
+        os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "29402")
+    print(
+        ">> DDP rendezvous:",
+        "MASTER_ADDR=", os.environ.get("MASTER_ADDR"),
+        "MASTER_PORT=", os.environ.get("MASTER_PORT"),
+        "RANK=", os.environ.get("RANK"),
+        "LOCAL_RANK=", os.environ.get("LOCAL_RANK"),
+        "WORLD_SIZE=", os.environ.get("WORLD_SIZE"),
+    )
+
     args = parse_args()
 
     # args.dist_timeout is defined in sglang.srt.server_args.ServerArgs and is in seconds.
@@ -341,6 +358,11 @@ def main():
         )
     else:
         torch.distributed.init_process_group(backend="nccl")
+
+    if args.aux_hidden_states_layers is not None:
+        args.aux_hidden_states_layers = [
+            int(layer) for layer in args.aux_hidden_states_layers.split(",")
+        ]
 
     assert os.path.exists(
         args.data_path
