@@ -1,0 +1,41 @@
+#!/bin/bash
+
+export DATAPATH="/root/.cache/user_artifacts/gpt-oss-120b/dataset/perfect-blend-gptoss-20B-1M.jsonl"
+export CACHE_DIR="/root/.cache/huggingface/hub"
+export OUTPUT_DIR="/root/data/yilian/data/gpt_oss_120B_embedding_output"
+export HIDDEN_STATES_DIR="/root/data/yilian/data/gpt_oss_120B"
+export DRAFT_CONFIG="/sgl-workspace/SpecForge/configs/gpt-oss-120B-eagle3_4096.json"
+export MODEL="openai/gpt-oss-120B"
+export CHAT_TEMPLATE="gpt-oss"
+export MAX_LENGTH=2048
+export CHECKPOINT_DIR="/path/to/your/checkpoint/directory"  # UPDATE THIS PATH
+
+# python scripts/view_data.py --data-path $HIDDEN_STATES_DIR/all_test/rows_0-5000/data_100.ckpt --tokenizer $MODEL_PATH
+# python scripts/view_data.py --data-path $HIDDEN_STATES_DIR/all_train/rows_0-5000/data_100.ckpt --tokenizer $MODEL_PATH
+
+export NUM_GPUS=8
+# CUDA_VISIBLE_DEVICES=0,1,2,3 \
+torchrun \
+    --standalone \
+    --nproc_per_node $NUM_GPUS \
+    scripts/train_eagle3_embedding_offline.py \
+    --target-model-path $MODEL \
+    --draft-model-config $DRAFT_CONFIG \
+    --checkpoint-dir $CHECKPOINT_DIR \
+    --train-data-path $DATAPATH \
+    --train-hidden-states-path $HIDDEN_STATES_DIR \
+    --output-dir $OUTPUT_DIR \
+    --num-epochs 10 \
+    --draft-global-batch-size 32 \
+    --draft-micro-batch-size 2 \
+    --learning-rate 5e-5 \
+    --draft-attention-backend flex_attention \
+    --max-length $MAX_LENGTH \
+    --chat-template $CHAT_TEMPLATE \
+    --cache-dir $CACHE_DIR \
+    --dist-timeout=120 \
+    --log-steps 1 \
+    --report-to wandb \
+    --wandb-project llama3-8b-eagle3 \
+    --wandb-key 6d964382a153a908ea0c874f64309c6e1605412b \
+    --wandb-name gpt-oss-embedding-4096
