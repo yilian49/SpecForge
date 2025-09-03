@@ -8,13 +8,13 @@ export DRAFT_CONFIG="/sgl-workspace/SpecForge/configs/gpt-oss-120B-eagle3_4096.j
 export MODEL="openai/gpt-oss-120B"
 export CHAT_TEMPLATE="gpt-oss"
 export MAX_LENGTH=2048
-export CHECKPOINT_DIR="/path/to/your/checkpoint/directory"  # UPDATE THIS PATH
+export CHECKPOINT_DIR="/root/data/yilian/data/gpt_oss_120B_output/epoch_4"  # UPDATE THIS PATH
 
 # python scripts/view_data.py --data-path $HIDDEN_STATES_DIR/all_test/rows_0-5000/data_100.ckpt --tokenizer $MODEL_PATH
 # python scripts/view_data.py --data-path $HIDDEN_STATES_DIR/all_train/rows_0-5000/data_100.ckpt --tokenizer $MODEL_PATH
 
-export NUM_GPUS=8
-# CUDA_VISIBLE_DEVICES=0,1,2,3 \
+export NUM_GPUS=4
+CUDA_VISIBLE_DEVICES=2,3,4,6 \
 torchrun \
     --standalone \
     --nproc_per_node $NUM_GPUS \
@@ -27,7 +27,7 @@ torchrun \
     --output-dir $OUTPUT_DIR \
     --num-epochs 10 \
     --draft-global-batch-size 32 \
-    --draft-micro-batch-size 2 \
+    --draft-micro-batch-size 8 \
     --learning-rate 5e-5 \
     --draft-attention-backend flex_attention \
     --max-length $MAX_LENGTH \
@@ -36,6 +36,6 @@ torchrun \
     --dist-timeout=120 \
     --log-steps 1 \
     --report-to wandb \
-    --wandb-project llama3-8b-eagle3 \
+    --wandb-project gpt-120b-embed \
     --wandb-key 6d964382a153a908ea0c874f64309c6e1605412b \
     --wandb-name gpt-oss-embedding-4096

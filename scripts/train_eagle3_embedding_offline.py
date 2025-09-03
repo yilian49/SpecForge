@@ -92,6 +92,12 @@ def parse_args():
     parser.add_argument("--output-dir", type=str, required=True)
     parser.add_argument("--eval-interval", type=int, default=1)
     parser.add_argument("--save-interval", type=int, default=1)
+    parser.add_argument(
+        "--save-percent-interval", 
+        type=float, 
+        default=1.0, 
+        help="Save checkpoint every N% of dataset processed (e.g., 1.0 for every 1%)"
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--dist-timeout",
@@ -239,7 +245,7 @@ def main():
         training_state_path = os.path.join(args.checkpoint_dir, "training_state.pt")
         if os.path.exists(training_state_path):
             print_with_rank(f"Loading training state from {training_state_path}")
-            training_state = torch.load(training_state_path, map_location="cpu")
+            training_state = torch.load(training_state_path, map_location="cpu", weights_only=False)
         
     # Freeze all weights except embedding layer
     for param in draft_model.parameters():
@@ -357,6 +363,19 @@ def main():
     print_with_rank("Initialized optimizer and scheduler")
 
     last_time = time.time()
+    
+    # Calculate total steps and checkpoint intervals (based on rank 0's local data)
+    total_steps_per_epoch = len(train_dataloader)
+    total_steps_all_epochs = total_steps_per_epoch * args.num_epochs
+    save_step_interval = int((args.save_percent_interval / 100.0) * total_steps_all_epochs)
+    if save_step_interval == 0:
+        save_step_interval = 1
+    
+    print_on_rank0(f"Total steps per epoch (rank 0): {total_steps_per_epoch}")
+    print_on_rank0(f"Total steps for all epochs (rank 0): {total_steps_all_epochs}")
+    print_on_rank0(f"Will save checkpoint every {save_step_interval} steps ({args.save_percent_interval}% of rank 0's dataset)")
+    
+    overall_step = 0  # Track overall progress across all epochs
 
     # start running
     for epoch in range(args.num_epochs):
@@ -368,6 +387,7 @@ def main():
 
         for data in tqdm(train_dataloader, desc=f"Training Epoch {epoch}"):
             batch_index += 1
+            overall_step += 1
             if args.profile:
                 if batch_index == args.profile_start_step:
                     print("Start profile")
@@ -422,6 +442,44 @@ def main():
                 if global_step % args.log_steps == 0:
                     tracker.log(log_dict, step=global_step)
                 log_dict = defaultdict(float)
+                
+                # Save checkpoint based on percentage of dataset processed
+                if overall_step % save_step_interval == 0:
+                    percentage_complete = (overall_step / total_steps_all_epochs) * 100
+                    checkpoint_dir = os.path.join(args.output_dir, f"step_{overall_step}_percent_{percentage_complete:.1f}")
+                    
+                    if dist.get_rank() == 0:
+                        os.makedirs(checkpoint_dir, exist_ok=True)
+                    dist.barrier()
+
+                    with FSDP.state_dict_type(eagle3_model, StateDictType.FULL_STATE_DICT):
+                        model_state_dict = eagle3_model.state_dict()
+                        state_to_save = {
+                            "epoch": epoch,
+                            "overall_step": overall_step,
+                            "global_step": global_step,
+                            "percentage_complete": percentage_complete,
+                            "args": args,
+                        }
+                        state_to_save.update(optimizer.state_dict())
+                        # Include ALL draft model weights including embeddings
+                        draft_model_state_dict = {
+                            k.replace("draft_model.", ""): v
+                            for k, v in model_state_dict.items()
+                            if "draft_model." in k
+                        }
+
+                        if dist.get_rank() == 0:
+                            torch.save(
+                                state_to_save,
+                                os.path.join(checkpoint_dir, "training_state.pt"),
+                            )
+                            draft_model.save_pretrained(
+                                checkpoint_dir,
+                                state_dict=draft_model_state_dict,
+                            )
+                            print_on_rank0(f"Saved checkpoint at {percentage_complete:.1f}% ({overall_step}/{total_steps_all_epochs} steps) to {checkpoint_dir}")
+                        dist.barrier()
 
             epoch_acces = [epoch_acces[i] + [acces[i]] for i in range(len(acces))]
             epoch_plosses = [
